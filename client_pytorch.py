@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import flwr as fl
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -128,10 +129,12 @@ def prepare_dataset(use_mnist: bool):
 
     trainsets = []
     validsets = []
+    random_seed = np.random.randint(0, 10000)  # Adjust range if needed
+    print(f"Using random seed: {random_seed}")
     for partition_id in range(NUM_CLIENTS):
         partition = fds.load_partition(partition_id, "train")
         # Divide data on each node: 90% train, 10% test
-        partition = partition.train_test_split(test_size=0.1, seed=42)
+        partition = partition.train_test_split(test_size=0.1, seed=random_seed)
         partition = partition.with_transform(apply_transforms)
         trainsets.append(partition["train"])
         validsets.append(partition["test"])
