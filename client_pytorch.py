@@ -85,22 +85,6 @@ def train(
 
             running_loss += loss.item()
 
-        # Save checkpoint after each epoch if directory is specified
-        if checkpoint_dir is not None and client_id is not None:
-            checkpoint_path = (
-                Path(checkpoint_dir) / f"client_{client_id}_epoch_{epoch+1}.pt"
-            )
-            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": net.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": running_loss,
-                },
-                checkpoint_path,
-            )
-
         print(f"Epoch {epoch+1} loss: {running_loss/len(trainloader):.3f}")
 
 
@@ -233,6 +217,24 @@ class FlowerClient(fl.client.NumPyClient):
         )
 
         loss, accuracy = test(self.model, valloader, self.device)
+
+        checkpoint_dir = self.checkpoint_dir
+        client_id = self.client_id
+        # Save checkpoint after each epoch if directory is specified
+        if checkpoint_dir is not None and client_id is not None:
+            checkpoint_path = (
+                Path(checkpoint_dir) / f"client_{client_id}.pt"
+            )
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "model_state_dict": self.model.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict(),
+                    "loss": loss,
+                },
+                checkpoint_path,
+            )
+
         return float(loss), len(valloader.dataset), {"accuracy": float(accuracy)}
 
 

@@ -7,6 +7,11 @@ import flwr as fl
 from flwr.common import Metrics, Parameters
 from flwr.server.client_proxy import ClientProxy
 import torch
+from torchvision.models import mobilenet_v3_small
+
+from client_pytorch import Net
+from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+import numpy as np
 
 parser = argparse.ArgumentParser(description="Flower Embedded devices")
 parser.add_argument(
@@ -39,6 +44,15 @@ parser.add_argument(
     default="saved_models",
     help="Directory to save the trained models (default: 'saved_models')",
 )
+
+
+# Instantiate model
+use_mnist = False
+if use_mnist:
+    model = Net()
+else:
+    model = mobilenet_v3_small(num_classes=10)
+model.to("cpu")
 
 
 def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
@@ -84,7 +98,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
 
         if aggregated_parameters is not None:
             # Convert parameters to PyTorch state_dict
-            parameters_dict = fl.common.parameters_to_ndarrays(aggregated_parameters)
+            parameters_dict = dict(zip(model.state_dict().keys(), fl.common.parameters_to_ndarrays(aggregated_parameters)))
 
             # Save the model
             save_path = self.save_dir / f"model_round_{server_round}.pt"
@@ -113,9 +127,39 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         return aggregated_parameters, aggregated_metrics
 
 
+def get_parameters(model):
+        """Get model parameters as a list of NumPy ndarrays."""
+        return [val.cpu().numpy() for _, val in model.state_dict().items()]
+
+def load_initial_parameters(model, checkpoint_path="saved_models/model_latest.pt"):
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        parameters_dict = checkpoint['model_state_dict']
+        
+        # Convert all numpy arrays in parameters_dict to torch.Tensor
+        if isinstance(parameters_dict, list):
+            parameters_dict = dict(zip(model.state_dict().keys(), [torch.tensor(param) for param in parameters_dict]))
+        
+        # Ensure all elements in parameters_dict are tensors
+        for key, value in parameters_dict.items():
+            if isinstance(value, np.ndarray):  # Convert if necessary
+                parameters_dict[key] = torch.tensor(value)
+        
+        model.load_state_dict(parameters_dict)
+        print("Existing model parameters loaded!")
+        
+        # Return parameters as a list of NumPy arrays for Flower
+        return fl.common.ndarrays_to_parameters([val.cpu().numpy() for _, val in model.state_dict().items()])
+    except FileNotFoundError:
+        print("No existing model parameters found!")
+        return get_parameters(model)
+
+
 def main():
     args = parser.parse_args()
     print(args)
+
+    parameters = load_initial_parameters(model)    
 
     # Define strategy with model saving
     strategy = SaveModelStrategy(
@@ -125,6 +169,7 @@ def main():
         min_fit_clients=args.min_num_clients,
         on_fit_config_fn=fit_config,
         evaluate_metrics_aggregation_fn=weighted_average,
+        initial_parameters=parameters,
     )
 
     # Start Flower server
