@@ -36,7 +36,7 @@ parser.add_argument(
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
-NUM_CLIENTS = 50
+NUM_CLIENTS = 2
 
 
 def train(
@@ -98,12 +98,12 @@ def prepare_dataset():
 
     trainsets = []
     validsets = []
-    random_seed = np.random.randint(0, 10000)  # Adjust range if needed
-    print(f"Using random seed: {random_seed}")
+    # random_seed = np.random.randint(0, 10000)  # Adjust range if needed
+    # print(f"Using random seed: {random_seed}")
     for partition_id in range(NUM_CLIENTS):
         partition = fds.load_partition(partition_id, "train")
         # Divide data on each node: 90% train, 10% test
-        partition = partition.train_test_split(test_size=0.1, seed=random_seed)
+        partition = partition.train_test_split(test_size=0.1, seed=1000)
         partition = partition.with_transform(apply_transforms)
         trainsets.append(partition["train"])
         validsets.append(partition["test"])
