@@ -9,7 +9,6 @@ from flwr.server.client_proxy import ClientProxy
 import torch
 from torchvision.models import mobilenet_v3_small
 
-from client_pytorch import Net
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 import numpy as np
 
@@ -23,7 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "--rounds",
     type=int,
-    default=5,
+    default=15,
     help="Number of rounds of federated learning (default: 5)",
 )
 parser.add_argument(
@@ -47,12 +46,7 @@ parser.add_argument(
 
 
 # Instantiate model
-use_mnist = False
-if use_mnist:
-    model = Net()
-else:
-    model = mobilenet_v3_small(num_classes=10)
-model.to("cpu")
+model = mobilenet_v3_small(num_classes=10)
 
 
 def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
@@ -128,8 +122,8 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
 
 
 def get_parameters(model):
-        """Get model parameters as a list of NumPy ndarrays."""
-        return [val.cpu().numpy() for _, val in model.state_dict().items()]
+    """Get model parameters as a list of NumPy ndarrays."""
+    return [val.cpu().numpy() for _, val in model.state_dict().items()]
 
 def load_initial_parameters(model, checkpoint_path="saved_models/model_latest.pt"):
     try:

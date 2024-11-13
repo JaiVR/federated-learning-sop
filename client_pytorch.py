@@ -29,11 +29,6 @@ parser.add_argument(
     help="Client id. Should be an integer between 0 and NUM_CLIENTS",
 )
 parser.add_argument(
-    "--mnist",
-    action="store_true",
-    help="If you use Raspberry Pi Zero clients (which just have 512MB or RAM) use MNIST",
-)
-parser.add_argument(
     "--checkpoint_dir",
     type=str,
     default="checkpoints",
@@ -42,27 +37,6 @@ parser.add_argument(
 
 warnings.filterwarnings("ignore", category=UserWarning)
 NUM_CLIENTS = 50
-
-
-class Net(nn.Module):
-    """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blitz')."""
-
-    def __init__(self) -> None:
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 4 * 4)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
 
 
 def train(
@@ -110,16 +84,11 @@ def test(net, testloader, device):
 
 
 # Dataset preparation function remains the same
-def prepare_dataset(use_mnist: bool):
-    """Get MNIST/CIFAR-10 and return client partitions and global testset."""
-    if use_mnist:
-        fds = FederatedDataset(dataset="mnist", partitioners={"train": NUM_CLIENTS})
-        img_key = "image"
-        norm = Normalize((0.1307,), (0.3081,))
-    else:
-        fds = FederatedDataset(dataset="cifar10", partitioners={"train": NUM_CLIENTS})
-        img_key = "img"
-        norm = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+def prepare_dataset():
+    """Get CIFAR-10 and return client partitions and global testset."""
+    fds = FederatedDataset(dataset="cifar10", partitioners={"train": NUM_CLIENTS})
+    img_key = "img"
+    norm = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     pytorch_transforms = Compose([ToTensor(), norm])
 
     def apply_transforms(batch):
@@ -147,7 +116,7 @@ class FlowerClient(fl.client.NumPyClient):
     """Enhanced FlowerClient with improved model management and checkpointing."""
 
     def __init__(
-        self, trainset, valset, use_mnist, checkpoint_dir=None, client_id=None
+        self, trainset, valset, checkpoint_dir=None, client_id=None
     ):
         self.trainset = trainset
         self.valset = valset
@@ -159,10 +128,7 @@ class FlowerClient(fl.client.NumPyClient):
         print(f"Using device: {self.device}")
 
         # Instantiate model
-        if use_mnist:
-            self.model = Net()
-        else:
-            self.model = mobilenet_v3_small(num_classes=10)
+        self.model = mobilenet_v3_small(num_classes=10)
         self.model.to(self.device)
 
         # Initialize optimizer
@@ -252,7 +218,7 @@ def main():
         Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     # Download dataset and partition it
-    trainsets, valsets, _ = prepare_dataset(args.mnist)
+    trainsets, valsets, _ = prepare_dataset()
 
     # Start Flower client
     fl.client.start_client(
@@ -260,7 +226,6 @@ def main():
         client=FlowerClient(
             trainset=trainsets[args.cid],
             valset=valsets[args.cid],
-            use_mnist=args.mnist,
             checkpoint_dir=args.checkpoint_dir,
             client_id=args.cid,
         ).to_client(),
