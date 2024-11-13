@@ -31,42 +31,17 @@ parser.add_argument(
     help="RTSP URL for video stream",
 )
 parser.add_argument(
-    "--mnist",
-    action="store_true",
-    help="Use MNIST model architecture",
-)
-parser.add_argument(
     "--confidence_threshold",
     type=float,
     default=0.1,
     help="Minimum confidence threshold for predictions",
 )
 
-class Net(nn.Module):
-    """MNIST Model Architecture"""
-    def __init__(self) -> None:
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 4 * 4)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
-
 class ModelManager:
-    def __init__(self, model_path, use_mnist=False):
+    def __init__(self, model_path):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model_path = Path(model_path)
-        self.use_mnist = use_mnist
-        self.model = None
+        self.model = mobilenet_v3_small(num_classes=10).to(self.device)
         self.last_modified = None
         self.load_model()
    
@@ -78,14 +53,16 @@ class ModelManager:
         current_modified = os.path.getmtime(self.model_path)
         if self.last_modified != current_modified:
             print(f"Loading model from {self.model_path}")
-            if self.use_mnist:
-                self.model = Net().to(self.device)
-            else:
-                self.model = mobilenet_v3_small(num_classes=10).to(self.device)
            
+            # Load the checkpoint
             checkpoint = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
+            parameters_dict = checkpoint['model_state_dict']
+            
+            # Convert numpy arrays to PyTorch tensors and load state dict
+            tensor_state_dict = {k: torch.tensor(v, device=self.device) for k, v in parameters_dict.items()}
+            self.model.load_state_dict(tensor_state_dict)
             self.model.eval()
+            
             self.last_modified = current_modified
             print(f"Model loaded successfully (Round: {checkpoint.get('round', 'N/A')})")
    
@@ -95,33 +72,26 @@ class ModelManager:
         return self.model
 
 class InferenceProcessor:
-    def __init__(self, use_mnist=False):
-        self.use_mnist = use_mnist
+    def __init__(self):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
        
         # Set up preprocessing based on model type
-        if use_mnist:
-            self.transform = Compose([
-                ToTensor(),
-                Normalize((0.1307,), (0.3081,))
-            ])
-        else:
-            self.transform = Compose([
-                ToTensor(),
-                Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+        self.transform = Compose([
+            ToTensor(),
+            Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
        
         self.labels = {
-            0: "airplane" if not use_mnist else "0",
-            1: "automobile" if not use_mnist else "1",
-            2: "bird" if not use_mnist else "2",
-            3: "cat" if not use_mnist else "3",
-            4: "deer" if not use_mnist else "4",
-            5: "dog" if not use_mnist else "5",
-            6: "frog" if not use_mnist else "6",
-            7: "horse" if not use_mnist else "7",
-            8: "ship" if not use_mnist else "8",
-            9: "truck" if not use_mnist else "9"
+            0: "airplane",
+            1: "automobile",
+            2: "bird",
+            3: "cat",
+            4: "deer",
+            5: "dog",
+            6: "frog",
+            7: "horse",
+            8: "ship",
+            9: "truck"
         }
    
     def preprocess_frame(self, frame):
