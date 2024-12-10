@@ -177,31 +177,87 @@ def test(net, testloader, device, get_class_acc=False):
 
 # Dataset preparation function remains the same
 def prepare_dataset():
-    """Get CIFAR-10 and return client partitions and global testset."""
+    """Get CIFAR-10 with balanced IID partitions."""
     fds = FederatedDataset(dataset="cifar10", partitioners={"train": NUM_CLIENTS})
+
     img_key = "img"
     norm = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     pytorch_transforms = Compose([ToTensor(), norm])
 
     def apply_transforms(batch):
-        """Apply transforms to the partition from FederatedDataset."""
         batch[img_key] = [pytorch_transforms(img) for img in batch[img_key]]
         return batch
 
     trainsets = []
     validsets = []
-    # random_seed = np.random.randint(0, 10000)  # Adjust range if needed
-    # print(f"Using random seed: {random_seed}")
+
+    # Calculate samples per class per client
+    total_train_samples = 50000  # CIFAR-10 train set size
+    samples_per_client = total_train_samples // NUM_CLIENTS
+    samples_per_class_per_client = samples_per_client // 10  # 10 classes
+
+    print(f"\nDistribution Info:")
+    print(f"Total clients: {NUM_CLIENTS}")
+    print(f"Samples per client: {samples_per_client}")
+    print(f"Samples per class per client: {samples_per_class_per_client}")
+
     for partition_id in range(NUM_CLIENTS):
         partition = fds.load_partition(partition_id, "train")
-        # Divide data on each node: 90% train, 10% test
-        partition = partition.train_test_split(test_size=0.1, seed=1000)
-        partition = partition.with_transform(apply_transforms)
-        trainsets.append(partition["train"])
-        validsets.append(partition["test"])
+
+        # Create balanced subset for each class
+        train_indices = []
+        val_indices = []
+
+        for class_idx in range(10):
+            class_indices = [
+                i for i, item in enumerate(partition) if item["label"] == class_idx
+            ]
+
+            if len(class_indices) >= samples_per_class_per_client:
+                selected_indices = class_indices[:samples_per_class_per_client]
+            else:
+                selected_indices = np.random.choice(
+                    class_indices, size=samples_per_class_per_client, replace=True
+                )
+
+            # Split indices into train and validation (80-20 split)
+            n_val = int(len(selected_indices) * 0.2)
+            val_indices.extend(selected_indices[:n_val])
+            train_indices.extend(selected_indices[n_val:])
+
+        # Create train and validation datasets
+        train_partition = partition.select(train_indices)
+        val_partition = partition.select(val_indices)
+
+        train_partition = train_partition.with_transform(apply_transforms)
+        val_partition = val_partition.with_transform(apply_transforms)
+
+        trainsets.append(train_partition)
+        validsets.append(val_partition)
+
+    # For test set, ensure equal distribution
     testset = fds.load_split("test")
-    testset = testset.with_transform(apply_transforms)
-    return trainsets, validsets, testset
+    samples_per_class_test = (
+        1000 // NUM_CLIENTS
+    )  # Each client gets equal portion of test set
+
+    balanced_test_indices = []
+    for class_idx in range(10):
+        class_indices = [
+            i for i, item in enumerate(testset) if item["label"] == class_idx
+        ]
+        if len(class_indices) >= samples_per_class_test:
+            selected_indices = class_indices[:samples_per_class_test]
+        else:
+            selected_indices = np.random.choice(
+                class_indices, size=samples_per_class_test, replace=True
+            )
+        balanced_test_indices.extend(selected_indices)
+
+    balanced_testset = testset.select(balanced_test_indices)
+    balanced_testset = balanced_testset.with_transform(apply_transforms)
+
+    return trainsets, validsets, balanced_testset
 
 
 class FlowerClient(fl.client.NumPyClient):
