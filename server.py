@@ -77,6 +77,20 @@ from torch.utils.data import DataLoader
 
 def test(model: nn.Module, testloader: DataLoader, device: torch.device):
     """Evaluate the model on the test set."""
+    # CIFAR-10 class labels
+    cifar10_labels = {
+        0: "airplane",
+        1: "automobile",
+        2: "bird",
+        3: "cat",
+        4: "deer",
+        5: "dog",
+        6: "frog",
+        7: "horse",
+        8: "ship",
+        9: "truck",
+    }
+
     model.eval()
     running_loss = 0.0
     class_correct = torch.zeros(10)
@@ -91,14 +105,11 @@ def test(model: nn.Module, testloader: DataLoader, device: torch.device):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
-            # Get predictions
             _, predicted = outputs.max(1)
 
-            # Update prediction distribution
             for pred in predicted:
                 prediction_distribution[pred] += 1
 
-            # Update class-wise accuracy
             for label, prediction in zip(labels, predicted):
                 class_total[label] += 1
                 if label == prediction:
@@ -106,42 +117,45 @@ def test(model: nn.Module, testloader: DataLoader, device: torch.device):
 
             running_loss += loss.item()
 
-    # Calculate metrics
     overall_accuracy = class_correct.sum() / class_total.sum() * 100
     avg_loss = running_loss / len(testloader)
 
-    # Print detailed metrics
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("SERVER-SIDE EVALUATION METRICS")
-    print("=" * 50)
+    print("=" * 60)
     print(f"\nOverall Test Accuracy: {overall_accuracy:.2f}%")
     print(f"Average Loss: {avg_loss:.4f}")
 
     print("\nClass-wise Performance:")
-    print("-" * 30)
+    print("-" * 60)
+    print(f"{'Class':<20} | {'Samples':>8} | {'Correct':>8} | {'Accuracy':>10}")
+    print("-" * 60)
     for i in range(10):
         accuracy = (
             (class_correct[i] / class_total[i] * 100) if class_total[i] > 0 else 0
         )
+        class_name = f"Class {i} ({cifar10_labels[i]})"
         print(
-            f"Class {i:2d}: {class_total[i]:4.0f} samples, {class_correct[i]:4.0f} correct, "
-            f"Accuracy: {accuracy:6.2f}%"
+            f"{class_name:<20} | {class_total[i]:8.0f} | {class_correct[i]:8.0f} | {accuracy:9.2f}%"
         )
 
     print("\nModel Prediction Distribution:")
-    print("-" * 30)
+    print("-" * 60)
+    print(f"{'Class':<20} | {'Predictions':>12} | {'Percentage':>10}")
+    print("-" * 60)
     total_predictions = prediction_distribution.sum()
     for i in range(10):
         percentage = (prediction_distribution[i] / total_predictions) * 100
+        class_name = f"Class {i} ({cifar10_labels[i]})"
         print(
-            f"Class {i:2d}: {prediction_distribution[i]:4.0f} predictions ({percentage:5.2f}%)"
+            f"{class_name:<20} | {prediction_distribution[i]:12.0f} | {percentage:9.2f}%"
         )
 
     # Create metrics dictionary for saving
     class_accuracies = {}
     for i in range(10):
         acc = (class_correct[i] / class_total[i] * 100) if class_total[i] > 0 else 0
-        class_accuracies[f"class_{i}_acc"] = float(acc)
+        class_accuracies[f"class_{i}_{cifar10_labels[i]}_acc"] = float(acc)
 
     metrics = {
         "accuracy": float(overall_accuracy),
