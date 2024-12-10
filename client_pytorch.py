@@ -36,7 +36,7 @@ parser.add_argument(
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
-NUM_CLIENTS = 2
+NUM_CLIENTS = 20
 
 
 def train(
@@ -115,9 +115,7 @@ def prepare_dataset():
 class FlowerClient(fl.client.NumPyClient):
     """Enhanced FlowerClient with improved model management and checkpointing."""
 
-    def __init__(
-        self, trainset, valset, checkpoint_dir=None, client_id=None
-    ):
+    def __init__(self, trainset, valset, checkpoint_dir=None, client_id=None):
         self.trainset = trainset
         self.valset = valset
         self.checkpoint_dir = checkpoint_dir
@@ -161,7 +159,7 @@ class FlowerClient(fl.client.NumPyClient):
             self.trainset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=0,  # Important for embedded devices
+            num_workers=0,
         )
 
         train(
@@ -172,6 +170,12 @@ class FlowerClient(fl.client.NumPyClient):
             device=self.device,
             checkpoint_dir=self.checkpoint_dir,
             client_id=self.client_id,
+        )
+
+        # Display accuracy on local client after training
+        loss, accuracy = test(self.model, trainloader, self.device)
+        print(
+            f"Client {self.client_id}: Local training accuracy: {accuracy * 100:.2f}%"
         )
 
         return self.get_parameters({}), len(trainloader.dataset), {}
@@ -191,9 +195,7 @@ class FlowerClient(fl.client.NumPyClient):
         client_id = self.client_id
         # Save checkpoint after each epoch if directory is specified
         if checkpoint_dir is not None and client_id is not None:
-            checkpoint_path = (
-                Path(checkpoint_dir) / f"client_{client_id}.pt"
-            )
+            checkpoint_path = Path(checkpoint_dir) / f"client_{client_id}.pt"
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 {
