@@ -39,35 +39,68 @@ warnings.filterwarnings("ignore", category=UserWarning)
 NUM_CLIENTS = 20
 
 
-def train(
-    net, trainloader, optimizer, epochs, device, checkpoint_dir=None, client_id=None
-):
+def train(net, trainloader, optimizer, epochs, device, **kwargs):
     """Train the model on the training set."""
-    criterion = torch.nn.CrossEntropyLoss()
-    net.train()
+    # Use label smoothing for better generalization
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
+    net.train()
     for epoch in range(epochs):
         running_loss = 0.0
-        for batch in tqdm(trainloader, desc=f"Epoch {epoch+1}/{epochs}"):
-            batch = list(batch.values())
-            images, labels = batch[0].to(device), batch[1].to(device)
+        correct = 0
+        total = 0
 
+        for batch in tqdm(trainloader, desc=f"Epoch {epoch+1}/{epochs}"):
+            images = batch["img"].to(device)
+            labels = batch["label"].to(device)
+
+            # Zero the parameter gradients
             optimizer.zero_grad()
+
+            # Forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
             loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+
             optimizer.step()
 
+            # Print statistics
             running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
 
-        print(f"Epoch {epoch+1} loss: {running_loss/len(trainloader):.3f}")
+        epoch_acc = 100.0 * correct / total
+        print(
+            f"Epoch {epoch + 1}, Loss: {running_loss/len(trainloader):.3f}, Acc: {epoch_acc:.2f}%"
+        )
+
+        # Monitor predictions distribution
+        if epoch == epochs - 1:
+            pred_dist = torch.zeros(10, device=device)
+            with torch.no_grad():
+                for batch in trainloader:
+                    outputs = net(batch["img"].to(device))
+                    _, preds = outputs.max(1)
+                    for i in range(10):
+                        pred_dist[i] += (preds == i).sum().item()
+            print("\nPrediction distribution:")
+            for i in range(10):
+                print(f"Class {i}: {pred_dist[i]:.0f} predictions")
 
 
-def test(net, testloader, device):
+def test(net, testloader, device, get_class_acc=False):
     """Validate the model on the test set."""
     criterion = torch.nn.CrossEntropyLoss()
     correct, total_loss = 0, 0.0
     net.eval()
+
+    class_correct = torch.zeros(10)
+    class_total = torch.zeros(10)
+    prediction_distribution = torch.zeros(10)
 
     with torch.no_grad():
         for batch in tqdm(testloader, desc="Testing"):
@@ -76,10 +109,39 @@ def test(net, testloader, device):
             outputs = net(images)
             total_loss += criterion(outputs, labels).item()
             _, predicted = torch.max(outputs.data, 1)
+
             correct += (predicted == labels).sum().item()
+
+            for label, prediction in zip(labels, predicted):
+                class_correct[label] += (label == prediction).item()
+                class_total[label] += 1
+
+            # Count model's predictions
+            for pred in predicted:
+                prediction_distribution[pred] += 1
 
     accuracy = correct / len(testloader.dataset)
     avg_loss = total_loss / len(testloader)
+
+    if get_class_acc:
+        class_accuracy = {}
+        for i in range(10):
+            if class_total[i] > 0:
+                class_accuracy[f"class_{i}_acc"] = float(
+                    class_correct[i] / class_total[i]
+                )
+                print(
+                    f"Class {i}: {class_total[i]} samples, {class_correct[i]} correct"
+                )
+            else:
+                class_accuracy[f"class_{i}_acc"] = 0.0
+                print(f"Class {i}: No samples")
+        return avg_loss, accuracy, class_accuracy
+
+    print("\nModel prediction distribution:")
+    for class_idx, count in enumerate(prediction_distribution):
+        print(f"Class {class_idx}: predicted {count} times")
+
     return avg_loss, accuracy
 
 
@@ -125,12 +187,23 @@ class FlowerClient(fl.client.NumPyClient):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
-        # Instantiate model
-        self.model = mobilenet_v3_small(num_classes=10)
+        # Initialize model with proper weights
+        self.model = mobilenet_v3_small(
+            pretrained=True
+        )  # Start with pretrained weights
+        # Modify the classifier for CIFAR-10
+        self.model.classifier[-1] = nn.Linear(in_features=1024, out_features=10)
         self.model.to(self.device)
 
-        # Initialize optimizer
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
+        # Use a more stable optimizer configuration
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=0.0001, weight_decay=0.01
+        )
+
+        # Add learning rate scheduler
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode="max", factor=0.1, patience=2, verbose=True
+        )
 
     def set_parameters(self, params):
         """Set model parameters from a list of NumPy ndarrays."""
@@ -152,6 +225,29 @@ class FlowerClient(fl.client.NumPyClient):
         print(f"Client {self.client_id}: Starting fit()")
         self.set_parameters(parameters)
 
+        # Adjust batch norm momentum for better training
+        for layer in self.model.modules():
+            if isinstance(layer, nn.BatchNorm2d):
+                layer.momentum = 0.01
+
+        trainloader = DataLoader(
+            self.trainset,
+            batch_size=config["batch_size"],
+            shuffle=True,
+            num_workers=0,
+            pin_memory=True,  # Add this for better performance
+        )
+
+        # Print class distribution
+        class_counts = torch.zeros(10)
+        for item in self.trainset:
+            label = item["label"]
+            class_counts[label] += 1
+
+        print("\nClass distribution in training set:")
+        for class_idx, count in enumerate(class_counts):
+            print(f"Class {class_idx}: {int(count)} samples")
+
         batch_size = config["batch_size"]
         epochs = config["epochs"]
 
@@ -172,8 +268,10 @@ class FlowerClient(fl.client.NumPyClient):
             client_id=self.client_id,
         )
 
-        # Display accuracy on local client after training
+        # Update learning rate based on training performance
         loss, accuracy = test(self.model, trainloader, self.device)
+        self.scheduler.step(accuracy)
+
         print(
             f"Client {self.client_id}: Local training accuracy: {accuracy * 100:.2f}%"
         )
@@ -185,15 +283,28 @@ class FlowerClient(fl.client.NumPyClient):
         print(f"Client {self.client_id}: Starting evaluate()")
         self.set_parameters(parameters)
 
-        valloader = DataLoader(
-            self.valset, batch_size=64, num_workers=0  # Important for embedded devices
+        # Add this code to check validation set distribution
+        class_counts = torch.zeros(10)
+        for item in self.valset:
+            label = item["label"]  # Get single label
+            class_counts[label] += 1
+
+        print("\nClass distribution in validation set:")
+        for class_idx, count in enumerate(class_counts):
+            print(f"Class {class_idx}: {int(count)} samples")
+
+        valloader = DataLoader(self.valset, batch_size=64, num_workers=0)
+
+        loss, accuracy, class_accuracy = test(
+            self.model, valloader, self.device, get_class_acc=True
         )
 
-        loss, accuracy = test(self.model, valloader, self.device)
+        print(f"\nClient {self.client_id} Class-wise Accuracy:")
+        for class_id, acc in class_accuracy.items():
+            print(f"{class_id}: {acc*100:.2f}%")
 
         checkpoint_dir = self.checkpoint_dir
         client_id = self.client_id
-        # Save checkpoint after each epoch if directory is specified
         if checkpoint_dir is not None and client_id is not None:
             checkpoint_path = Path(checkpoint_dir) / f"client_{client_id}.pt"
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,11 +313,17 @@ class FlowerClient(fl.client.NumPyClient):
                     "model_state_dict": self.model.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
                     "loss": loss,
+                    "class_accuracy": class_accuracy,
                 },
                 checkpoint_path,
             )
 
-        return float(loss), len(valloader.dataset), {"accuracy": float(accuracy)}
+        # Include class-wise accuracy in the returned metrics
+        return (
+            float(loss),
+            len(valloader.dataset),
+            {"accuracy": float(accuracy), **class_accuracy},
+        )
 
 
 def main():
