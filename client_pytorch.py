@@ -126,11 +126,11 @@ def test(net, testloader, device, get_class_acc=False):
             correct += (predicted == labels).sum().item()
 
             for label, prediction in zip(labels, predicted):
-                class_correct[label] += (label == prediction).item()
-                class_total[label] += 1
+                class_correct[label.item()] += (label == prediction).item()
+                class_total[label.item()] += 1
 
             for pred in predicted:
-                prediction_distribution[pred] += 1
+                prediction_distribution[pred.item()] += 1
 
     accuracy = correct / len(testloader.dataset)
     avg_loss = total_loss / len(testloader)
@@ -144,38 +144,35 @@ def test(net, testloader, device, get_class_acc=False):
 
         print("\nClass-wise Performance:")
         print("-" * 60)
-        print(f"{'Class':<20} | {'Samples':>8} | {'Correct':>8} | {'Accuracy':>10}")
+        print(f"{'Class':<20} | {'Samples':>8} | {'Correct':>8} | {'Accuracy':>9}")
         print("-" * 60)
 
         class_accuracy = {}
         for i in range(10):
-            if class_total[i] > 0:
-                acc = float(class_correct[i] / class_total[i])
-                class_accuracy[f"class_{i}_{CIFAR10_LABELS[i]}_acc"] = acc
-                class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
-                print(
-                    f"{class_name:<20} | {class_total[i]:8.0f} | {class_correct[i]:8.0f} | {acc*100:9.2f}%"
-                )
-            else:
-                class_accuracy[f"class_{i}_{CIFAR10_LABELS[i]}_acc"] = 0.0
-                class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
-                print(f"{class_name:<20} | {0:8.0f} | {0:8.0f} | {0:9.2f}%")
+            total = float(class_total[i].item())  # Convert to Python float
+            correct = float(class_correct[i].item())  # Convert to Python float
+            acc = (correct / total * 100) if total > 0 else 0.0
+            class_accuracy[f"class_{i}_{CIFAR10_LABELS[i]}_acc"] = float(
+                acc / 100
+            )  # Store as decimal
+            class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
+            print(f"{class_name:<20} | {total:8.0f} | {correct:8.0f} | {acc:8.2f}%")
 
         print("\nModel Prediction Distribution:")
         print("-" * 60)
         print(f"{'Class':<20} | {'Predictions':>12} | {'Percentage':>10}")
         print("-" * 60)
-        total_predictions = prediction_distribution.sum()
+        total_predictions = float(prediction_distribution.sum().item())
         for i in range(10):
-            percentage = (prediction_distribution[i] / total_predictions) * 100
+            pred_count = float(prediction_distribution[i].item())
+            percentage = pred_count / total_predictions * 100
             class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
-            print(
-                f"{class_name:<20} | {prediction_distribution[i]:12.0f} | {percentage:9.2f}%"
-            )
+            print(f"{class_name:<20} | {pred_count:12.0f} | {percentage:9.2f}%")
 
-        return avg_loss, accuracy, class_accuracy
+        # Convert all values to Python primitives before returning
+        return float(avg_loss), float(accuracy), class_accuracy
 
-    return avg_loss, accuracy
+    return float(avg_loss), float(accuracy)
 
 
 # Dataset preparation function remains the same
