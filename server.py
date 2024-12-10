@@ -14,6 +14,8 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 import numpy as np
 
+from tqdm import tqdm
+
 parser = argparse.ArgumentParser(description="Flower Embedded devices")
 parser.add_argument(
     "--server_address",
@@ -77,43 +79,78 @@ def test(model: nn.Module, testloader: DataLoader, device: torch.device):
     """Evaluate the model on the test set."""
     model.eval()
     running_loss = 0.0
-    correct = 0
-    total = 0
-
-    # Add class-wise tracking
     class_correct = torch.zeros(10)
     class_total = torch.zeros(10)
+    prediction_distribution = torch.zeros(10)
+
+    criterion = nn.CrossEntropyLoss()
 
     with torch.no_grad():
-        for data in testloader:
+        for data in tqdm(testloader, desc="Server-side Testing"):
             inputs, labels = data["img"].to(device), data["label"].to(device)
-
             outputs = model(inputs)
-            loss = nn.CrossEntropyLoss()(outputs, labels)
+            loss = criterion(outputs, labels)
 
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            # Get predictions
+            _, predicted = outputs.max(1)
 
-            # Class-wise accuracy
+            # Update prediction distribution
+            for pred in predicted:
+                prediction_distribution[pred] += 1
+
+            # Update class-wise accuracy
             for label, prediction in zip(labels, predicted):
-                class_correct[label] += (label == prediction).item()
                 class_total[label] += 1
+                if label == prediction:
+                    class_correct[label] += 1
 
             running_loss += loss.item()
 
-    accuracy = 100 * correct / total
+    # Calculate metrics
+    overall_accuracy = class_correct.sum() / class_total.sum() * 100
+    avg_loss = running_loss / len(testloader)
 
-    # Calculate and print class-wise accuracy
-    print("\nServer-side Class-wise Accuracy:")
-    class_accuracy = {}
+    # Print detailed metrics
+    print("\n" + "=" * 50)
+    print("SERVER-SIDE EVALUATION METRICS")
+    print("=" * 50)
+    print(f"\nOverall Test Accuracy: {overall_accuracy:.2f}%")
+    print(f"Average Loss: {avg_loss:.4f}")
+
+    print("\nClass-wise Performance:")
+    print("-" * 30)
     for i in range(10):
-        if class_total[i] > 0:
-            class_acc = 100 * class_correct[i] / class_total[i]
-            class_accuracy[f"class_{i}"] = class_acc
-            print(f"Class {i}: {class_acc:.2f}%")
+        accuracy = (
+            (class_correct[i] / class_total[i] * 100) if class_total[i] > 0 else 0
+        )
+        print(
+            f"Class {i:2d}: {class_total[i]:4.0f} samples, {class_correct[i]:4.0f} correct, "
+            f"Accuracy: {accuracy:6.2f}%"
+        )
 
-    return running_loss / len(testloader), accuracy, class_accuracy
+    print("\nModel Prediction Distribution:")
+    print("-" * 30)
+    total_predictions = prediction_distribution.sum()
+    for i in range(10):
+        percentage = (prediction_distribution[i] / total_predictions) * 100
+        print(
+            f"Class {i:2d}: {prediction_distribution[i]:4.0f} predictions ({percentage:5.2f}%)"
+        )
+
+    # Create metrics dictionary for saving
+    class_accuracies = {}
+    for i in range(10):
+        acc = (class_correct[i] / class_total[i] * 100) if class_total[i] > 0 else 0
+        class_accuracies[f"class_{i}_acc"] = float(acc)
+
+    metrics = {
+        "accuracy": float(overall_accuracy),
+        "loss": float(avg_loss),
+        "prediction_distribution": prediction_distribution.tolist(),
+        **class_accuracies,
+    }
+
+    return avg_loss, overall_accuracy, metrics
 
 
 def prepare_test_dataset():
@@ -156,7 +193,6 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         failures: List[BaseException],
     ) -> tuple[Parameters, dict]:
         """Aggregate model weights and save the model after each round."""
-        # Aggregate weights using parent class method
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(
             server_round, results, failures
         )
@@ -173,17 +209,15 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             # Evaluate aggregated model on the testset
             testset = prepare_test_dataset()
             testloader = DataLoader(testset, batch_size=64, num_workers=0)
-            loss, accuracy, class_accuracy = test(
+            loss, accuracy, metrics = test(
                 model, testloader, device=torch.device("cpu")
             )
 
-            print(f"\nRound {server_round}:")
-            print(f"Overall Test Accuracy: {accuracy:.4f}")
+            print("\n" + "=" * 50)
+            print(f"ROUND {server_round} COMPLETE")
+            print("=" * 50)
 
-            # Save metrics including class-wise accuracy
-            metrics = {"accuracy": accuracy, "loss": loss, **class_accuracy}
-
-            # Save the model with updated metrics
+            # Save the model and metrics
             save_path = self.save_dir / f"model_round_{server_round}.pt"
             torch.save(
                 {
@@ -193,6 +227,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 },
                 save_path,
             )
+            print(f"\nSaved aggregated model for round {server_round} to {save_path}")
 
             # Save as latest model for inference
             latest_path = self.save_dir / "model_latest.pt"
@@ -204,6 +239,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 },
                 latest_path,
             )
+            print(f"Saved latest model to {latest_path}")
 
             return aggregated_parameters, metrics
 
