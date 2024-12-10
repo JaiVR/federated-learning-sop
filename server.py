@@ -62,7 +62,7 @@ def weighted_average(metrics: List[Tuple[ClientProxy, Metrics]]) -> Metrics:
 def fit_config(server_round: int):
     """Return configuration with better training parameters."""
     config = {
-        "epochs": 5,  # Increase epochs
+        "epochs": 2,  # Increase epochs
         "batch_size": 32,  # Slightly larger batch size
         "learning_rate": 0.0001,  # Controlled learning rate
     }

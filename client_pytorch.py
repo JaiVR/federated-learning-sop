@@ -38,10 +38,22 @@ parser.add_argument(
 warnings.filterwarnings("ignore", category=UserWarning)
 NUM_CLIENTS = 20
 
+CIFAR10_LABELS = {
+    0: "airplane",
+    1: "automobile",
+    2: "bird",
+    3: "cat",
+    4: "deer",
+    5: "dog",
+    6: "frog",
+    7: "horse",
+    8: "ship",
+    9: "truck",
+}
+
 
 def train(net, trainloader, optimizer, epochs, device, **kwargs):
     """Train the model on the training set."""
-    # Use label smoothing for better generalization
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     net.train()
@@ -54,32 +66,30 @@ def train(net, trainloader, optimizer, epochs, device, **kwargs):
             images = batch["img"].to(device)
             labels = batch["label"].to(device)
 
-            # Zero the parameter gradients
             optimizer.zero_grad()
-
-            # Forward + backward + optimize
             outputs = net(images)
             loss = criterion(outputs, labels)
             loss.backward()
 
-            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-
             optimizer.step()
 
-            # Print statistics
             running_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
         epoch_acc = 100.0 * correct / total
-        print(
-            f"Epoch {epoch + 1}, Loss: {running_loss/len(trainloader):.3f}, Acc: {epoch_acc:.2f}%"
-        )
+        print(f"\nEpoch {epoch + 1}")
+        print(f"Training Loss: {running_loss/len(trainloader):.3f}")
+        print(f"Training Accuracy: {epoch_acc:.2f}%")
 
-        # Monitor predictions distribution
         if epoch == epochs - 1:
+            print("\nFinal Epoch Prediction Distribution:")
+            print("-" * 60)
+            print(f"{'Class':<20} | {'Predictions':>12} | {'Percentage':>10}")
+            print("-" * 60)
+
             pred_dist = torch.zeros(10, device=device)
             with torch.no_grad():
                 for batch in trainloader:
@@ -87,9 +97,12 @@ def train(net, trainloader, optimizer, epochs, device, **kwargs):
                     _, preds = outputs.max(1)
                     for i in range(10):
                         pred_dist[i] += (preds == i).sum().item()
-            print("\nPrediction distribution:")
+
+            total_preds = pred_dist.sum()
             for i in range(10):
-                print(f"Class {i}: {pred_dist[i]:.0f} predictions")
+                percentage = (pred_dist[i] / total_preds) * 100
+                class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
+                print(f"{class_name:<20} | {pred_dist[i]:12.0f} | {percentage:9.2f}%")
 
 
 def test(net, testloader, device, get_class_acc=False):
@@ -116,7 +129,6 @@ def test(net, testloader, device, get_class_acc=False):
                 class_correct[label] += (label == prediction).item()
                 class_total[label] += 1
 
-            # Count model's predictions
             for pred in predicted:
                 prediction_distribution[pred] += 1
 
@@ -124,23 +136,44 @@ def test(net, testloader, device, get_class_acc=False):
     avg_loss = total_loss / len(testloader)
 
     if get_class_acc:
+        print("\n" + "=" * 60)
+        print("CLIENT-SIDE EVALUATION METRICS")
+        print("=" * 60)
+        print(f"\nOverall Test Accuracy: {accuracy*100:.2f}%")
+        print(f"Average Loss: {avg_loss:.4f}")
+
+        print("\nClass-wise Performance:")
+        print("-" * 60)
+        print(f"{'Class':<20} | {'Samples':>8} | {'Correct':>8} | {'Accuracy':>10}")
+        print("-" * 60)
+
         class_accuracy = {}
         for i in range(10):
             if class_total[i] > 0:
-                class_accuracy[f"class_{i}_acc"] = float(
-                    class_correct[i] / class_total[i]
-                )
+                acc = float(class_correct[i] / class_total[i])
+                class_accuracy[f"class_{i}_{CIFAR10_LABELS[i]}_acc"] = acc
+                class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
                 print(
-                    f"Class {i}: {class_total[i]} samples, {class_correct[i]} correct"
+                    f"{class_name:<20} | {class_total[i]:8.0f} | {class_correct[i]:8.0f} | {acc*100:9.2f}%"
                 )
             else:
-                class_accuracy[f"class_{i}_acc"] = 0.0
-                print(f"Class {i}: No samples")
-        return avg_loss, accuracy, class_accuracy
+                class_accuracy[f"class_{i}_{CIFAR10_LABELS[i]}_acc"] = 0.0
+                class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
+                print(f"{class_name:<20} | {0:8.0f} | {0:8.0f} | {0:9.2f}%")
 
-    print("\nModel prediction distribution:")
-    for class_idx, count in enumerate(prediction_distribution):
-        print(f"Class {class_idx}: predicted {count} times")
+        print("\nModel Prediction Distribution:")
+        print("-" * 60)
+        print(f"{'Class':<20} | {'Predictions':>12} | {'Percentage':>10}")
+        print("-" * 60)
+        total_predictions = prediction_distribution.sum()
+        for i in range(10):
+            percentage = (prediction_distribution[i] / total_predictions) * 100
+            class_name = f"Class {i} ({CIFAR10_LABELS[i]})"
+            print(
+                f"{class_name:<20} | {prediction_distribution[i]:12.0f} | {percentage:9.2f}%"
+            )
+
+        return avg_loss, accuracy, class_accuracy
 
     return avg_loss, accuracy
 
@@ -243,6 +276,17 @@ class FlowerClient(fl.client.NumPyClient):
         for item in self.trainset:
             label = item["label"]
             class_counts[label] += 1
+
+        # In the fit method of FlowerClient
+        print("\nClass distribution in training set:")
+        print("-" * 60)
+        print(f"{'Class':<20} | {'Samples':>8} | {'Percentage':>10}")
+        print("-" * 60)
+        total_samples = class_counts.sum()
+        for class_idx, count in enumerate(class_counts):
+            percentage = (count / total_samples) * 100
+            class_name = f"Class {class_idx} ({CIFAR10_LABELS[class_idx]})"
+            print(f"{class_name:<20} | {int(count):8d} | {percentage:9.2f}%")
 
         print("\nClass distribution in training set:")
         for class_idx, count in enumerate(class_counts):
