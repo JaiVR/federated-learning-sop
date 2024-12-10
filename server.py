@@ -22,7 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "--rounds",
     type=int,
-    default=15,
+    default=10,
     help="Number of rounds of federated learning (default: 5)",
 )
 parser.add_argument(
@@ -146,7 +146,7 @@ def load_initial_parameters(model, checkpoint_path="saved_models/model_latest.pt
         return fl.common.ndarrays_to_parameters([val.cpu().numpy() for _, val in model.state_dict().items()])
     except FileNotFoundError:
         print("No existing model parameters found!")
-        return get_parameters(model)
+        return False
 
 
 def main():
@@ -156,15 +156,25 @@ def main():
     parameters = load_initial_parameters(model)    
 
     # Define strategy with model saving
-    strategy = SaveModelStrategy(
-        save_dir=args.save_dir,
-        fraction_fit=args.sample_fraction,
-        fraction_evaluate=args.sample_fraction,
-        min_fit_clients=args.min_num_clients,
-        on_fit_config_fn=fit_config,
-        evaluate_metrics_aggregation_fn=weighted_average,
-        initial_parameters=parameters,
-    )
+    if parameters:
+        strategy = SaveModelStrategy(
+            save_dir=args.save_dir,
+            fraction_fit=args.sample_fraction,
+            fraction_evaluate=args.sample_fraction,
+            min_fit_clients=args.min_num_clients,
+            on_fit_config_fn=fit_config,
+            evaluate_metrics_aggregation_fn=weighted_average,
+            initial_parameters=parameters,
+        )
+    else:
+        strategy = SaveModelStrategy(
+            save_dir=args.save_dir,
+            fraction_fit=args.sample_fraction,
+            fraction_evaluate=args.sample_fraction,
+            min_fit_clients=args.min_num_clients,
+            on_fit_config_fn=fit_config,
+            evaluate_metrics_aggregation_fn=weighted_average,
+        )
 
     # Start Flower server
     fl.server.start_server(
