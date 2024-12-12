@@ -1,20 +1,18 @@
+import flwr as fl
 import argparse
+
 from typing import List, Tuple
-import os
 from pathlib import Path
 
-import flwr as fl
 from flwr.common import Metrics, Parameters
 from flwr.server.client_proxy import ClientProxy
-import torch
+
 from torchvision.models import mobilenet_v3_small
 from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
-import numpy as np
-
 from tqdm import tqdm
+
 
 parser = argparse.ArgumentParser(description="Flower Embedded devices")
 parser.add_argument(
