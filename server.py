@@ -188,15 +188,16 @@ def prepare_test_dataset():
 class SaveModelStrategy(fl.server.strategy.FedAvg):
     """Custom strategy that saves the model after training."""
 
-    def __init__(
-        self,
-        save_dir: str = "saved_models",
-        *args,
-        **kwargs,
-    ):
+    def __init__(self, save_dir: str = "saved_models", *args, **kwargs):
+        """
+        Initialize the strategy with a save directory for model checkpoints.
+
+        Args:
+            save_dir (str): Directory to save the models (default: 'saved_models').
+        """
         super().__init__(*args, **kwargs)
-        self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(exist_ok=True, parents=True)
+        self.save_dir = Path(save_dir)  # Directory for saving models
+        self.save_dir.mkdir(exist_ok=True, parents=True)  # Ensure the directory exists
 
     def aggregate_fit(
         self,
@@ -204,13 +205,24 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         results: List[Tuple[ClientProxy, fl.common.FitRes]],
         failures: List[BaseException],
     ) -> tuple[Parameters, dict]:
-        """Aggregate model weights and save the model after each round."""
+        """
+        Aggregate model weights from clients and save the model after each round.
+
+        Args:
+            server_round (int): The current round number.
+            results (List): List of results from clients after training.
+            failures (List): List of exceptions raised during training on clients.
+
+        Returns:
+            tuple: Aggregated model parameters and evaluation metrics.
+        """
+        # Perform model aggregation using FedAvg
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(
             server_round, results, failures
         )
 
         if aggregated_parameters is not None:
-            # Convert parameters to PyTorch state_dict
+            # Convert aggregated parameters to PyTorch state_dict
             parameters_dict = dict(
                 zip(
                     model.state_dict().keys(),
@@ -218,7 +230,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 )
             )
 
-            # Evaluate aggregated model on the testset
+            # Evaluate the aggregated model on the test set
             testset = prepare_test_dataset()
             testloader = DataLoader(testset, batch_size=64, num_workers=0)
             loss, accuracy, metrics = test(
@@ -229,7 +241,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             print(f"ROUND {server_round} COMPLETE")
             print("=" * 50)
 
-            # Save the model and metrics
+            # Save the model after aggregation
             save_path = self.save_dir / f"model_round_{server_round}.pt"
             torch.save(
                 {
@@ -241,7 +253,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             )
             print(f"\nSaved aggregated model for round {server_round} to {save_path}")
 
-            # Save as latest model for inference
+            # Save the latest model for inference
             latest_path = self.save_dir / "model_latest.pt"
             torch.save(
                 {
@@ -259,29 +271,32 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
 
 
 def get_parameters(model):
-    """Get model parameters as a list of NumPy ndarrays."""
+    """Extract model parameters as a list of NumPy ndarrays."""
     return [val.cpu().numpy() for _, val in model.state_dict().items()]
 
 
 def main():
+    # Parse command line arguments
     args = parser.parse_args()
     print(args)
 
-    # Define strategy with model saving
+    # Define custom strategy with model saving functionality
     strategy = SaveModelStrategy(
-        save_dir=args.save_dir,
-        fraction_fit=args.sample_fraction,
-        fraction_evaluate=args.sample_fraction,
-        min_fit_clients=args.min_num_clients,
-        on_fit_config_fn=fit_config,
-        evaluate_metrics_aggregation_fn=weighted_average,
+        save_dir=args.save_dir,  # Directory to save models
+        fraction_fit=args.sample_fraction,  # Fraction of clients used for training
+        fraction_evaluate=args.sample_fraction,  # Fraction of clients used for evaluation
+        min_fit_clients=args.min_num_clients,  # Minimum number of clients required for fit
+        on_fit_config_fn=fit_config,  # Custom function to define training config (epochs, batch size, etc.)
+        evaluate_metrics_aggregation_fn=weighted_average,  # Function to aggregate evaluation metrics
     )
 
-    # Start Flower server
+    # Start Flower server with the defined strategy
     fl.server.start_server(
-        server_address=args.server_address,
-        config=fl.server.ServerConfig(num_rounds=args.rounds),
-        strategy=strategy,
+        server_address=args.server_address,  # Server address (e.g., '0.0.0.0:8080')
+        config=fl.server.ServerConfig(
+            num_rounds=args.rounds
+        ),  # Number of federated learning rounds
+        strategy=strategy,  # Pass the custom strategy to the server
     )
 
 
